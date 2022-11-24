@@ -1,0 +1,385 @@
+#!/usr/bin/bash
+<<'COMMENT'
+ * This file is part of the TORUScan project.
+ * TORUScan - driver for TORUS(R) series network scaners by Jetcom(R)
+ * Copyright (C) 2022 Denis Kazakov <kazakow.denis@yandex.ru>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; see the file COPYING.  If not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+COMMENT
+
+# ******************************************************************
+# Global variables
+# ******************************************************************
+	dImgBPP=0
+	dRowBytes=0
+	dMaxStrip=$(( 4096*1024 ))
+	
+	dRowsPS=0; 		hleRowsPS=""
+	dStripsQty=0; 	hleStripsQty=""
+	dStripBytes=0; 	hleStripBytes=""	
+	dLastBytes=0; 	hleLastBytes=""
+	dStripOS=0;		hleStripOS=""
+	
+	hleResolution=""
+	hleImgWidth=""
+	hleImgHeight=""
+
+	doIFD=0; 		hleoIFD=""
+	doBitsPS=0; 	hleoBitsPS=""
+	doStripBC=0; 	hleoStripBC=""
+	doStripOS=0; 	hleoStripOS=""
+	doXres=0; 		hleoXres=""
+	doYres=0; 		hleoYres=""
+
+	hleT100=""
+	hleT101=""
+	hleT102=""
+	hleT103=""
+	hleT106=""
+	hleT111=""
+	hleT112=""
+	hleT115=""
+	hleT116=""
+	hleT117=""
+	hleT11a=""
+	hleT11b=""
+	hleT11c=""
+	hleT128=""
+	hleTRes=""
+	hleTBitsPS=""
+
+# /// convert hex value form bigEndian to LittleEndian
+function big2lit()
+{ # Begin Sub
+
+		aArgVal=$1
+		dArgLen=${#aArgVal}
+	
+		if ! [ $(( dArgLen%2 )) -eq 0 ]; then
+			printf "Error: big2lit: odd number of symbols\n"
+			exit 1 # error exit
+		fi
+	
+		dBytesCnt=$(( dArgLen/2 ))
+		if ! [ $(( dBytesCnt%2 )) -eq 0 ]; then
+			printf "Error: big2lit: odd number of bytes\n"
+			exit 1 # error exit
+		fi
+	
+		aLitEnd=""
+		while (( dBytesCnt > 0 )); do
+			dSymNum=$(( dBytesCnt*2-2 ))
+			aLitEnd="$aLitEnd${aArgVal:$dSymNum:2}"
+			dBytesCnt=$(( dBytesCnt-1 ))
+		done
+		hleResult=$aLitEnd
+		echo -n $aLitEnd
+} # End Sub
+
+# /// calculate tiff header parameters
+function caclTiffParams()
+{ # Begin Sub
+
+		case $aClrMode in
+			"mono") dImgBPP=$(( 1 )) ;;
+			"grey") dImgBPP=$(( 8 )) ;;
+			"color") dImgBPP=$(( 24 )) ;;
+		esac
+
+		dRowBytes=$(( dImgWidth*dImgBPP/8 ))	
+		dRowsPS=$(( dMaxStrip/dRowBytes ))
+
+		dStripBytes=$(( dRowsPS*dRowBytes ))
+		if (( dStripBytes>dImgBytes )); then
+			dStripBytes=$dImgBytes
+		fi
+
+		doIFD=$(( dImgBytes+8 ))
+		doT100=$(( doIFD+2 ))
+		
+		if [ "$aClrMode" == "color" ]; then
+			doXres=$(( doT100+172 ))
+		else
+			doXres=$(( doT100+160 ))
+		fi
+		doYres=$(( doXres+8 ))
+	
+		if [ "$aClrMode" == "color" ]; then
+			doBitsPS=$(( doYres+8 ))
+		fi
+		
+		if (( dStripBytes<dImgBytes )); then
+			dStripsQty=$(( dImgBytes/dStripBytes+1 ))
+			dLastBytes=$(( dImgBytes-(dStripsQty-1)*dStripBytes ))
+
+			if [ "$aClrMode" == "color" ]; then
+				doStripBC=$(( doBitsPS+6 ))
+			else
+				doStripBC=$(( doYres+8 ))
+			fi
+			doStripOS=$(( doStripBC+dStripsQty*4 ))
+		fi
+} # End Sub
+
+# /// construct tiff image header
+function formTiffHeader()
+{ # Begin Sub
+	hleImgWidth=$( printf '%08x\n' $dImgWidth )
+	hleImgWidth=$( big2lit $hleImgWidth )
+		
+	hleImgHeight=$( printf '%08x\n' $dImgHeight )
+	hleImgHeight=$( big2lit $hleImgHeight )
+		
+	hleResolution=$( printf '%08x\n' $aResolution )
+	hleResolution=$( big2lit $hleResolution )
+		
+	hleRowsPS=$( printf '%08x\n' $dRowsPS )
+	hleRowsPS=$( big2lit $hleRowsPS )
+
+	hleoIFD=$( printf '%08x\n' $doIFD )
+	hleoIFD=$( big2lit $hleoIFD )
+		
+	hleoXres=$( printf '%08x\n' $doXres )
+	hleoXres=$( big2lit $hleoXres )
+	hleoYres=$( printf '%08x\n' $doYres )
+	hleoYres=$( big2lit $hleoYres )		
+		
+	hleoBitsPS=$( printf '%08x\n' $doBitsPS )
+	hleoBitsPS=$( big2lit $hleoBitsPS )
+		
+	hleStripsQty=$( printf '%08x\n' $dStripsQty )
+	hleStripsQty=$( big2lit $hleStripsQty )
+		
+	hleStripBytes=$( printf '%08x\n' $dStripBytes )
+	hleStripBytes=$( big2lit $hleStripBytes )
+	hleLastBytes=$( printf '%08x\n' $dLastBytes )
+	hleLastBytes=$( big2lit $hleLastBytes )
+		
+	hleoStripBC=$( printf '%08x\n' $doStripBC )
+	hleoStripBC=$( big2lit $hleoStripBC )
+		
+	hleoStripOS=$( printf '%08x\n' $doStripOS )
+	hleoStripOS=$( big2lit $hleoStripOS )
+		
+	printf "=================================================\n"
+	printf "Debug: dImgBytes          | $dImgBytes\n"
+	printf "Debug: dRowBytes          | $dRowBytes\n"
+	printf "Debug: dRowsPS            | $dRowsPS\n"
+	printf "Debug: dStripBytes        | $dStripBytes\n"
+	printf "Debug: dStripsQty         | $dStripsQty\n"
+	printf "Debug: dLastBytes         | $dLastBytes\n"
+	printf "=================================================\n"
+	printf "Debug: doIFD              | $doIFD\n"
+	printf "Debug: doXres             | $doXres\n"
+	printf "Debug: doYres             | $doYres\n"
+	printf "Debug: doBitsPS           | $doBitsPS\n"
+	printf "Debug: doStripBC          | $doStripBC\n"
+	printf "Debug: doStripOS          | $doStripOS\n"
+} # End Sub
+	
+# /// write tiff image
+function writeTiffImage()
+{ # Begin Sub
+	aTstamp=$( date +%s )
+	aOutput="${aOutput}/scan${aTstamp}.tif"
+	
+	# write tiff header
+	printf "49492A00" | xxd -r -p > "$aOutput"
+	printf "$hleoIFD" | xxd -r -p >> "$aOutput"
+
+	# write image body
+	dd if="$aDataCache" of="$aOutput" \
+		bs=1024 oflag=append conv=nocreat,notrunc
+
+	# write IFD records number
+	if [ "$aClrMode" == "color" ]; then
+		printf "0E00" | xxd -r -p >> "$aOutput"
+	else
+		printf "0D00" | xxd -r -p >> "$aOutput"
+	fi
+
+	# write tag100 (image width)
+	hleT100="0001030001000000xxxxxxxx"
+	hleT100="${hleT100/xxxxxxxx/$hleImgWidth}"
+	printf "$hleT100" | xxd -r -p >> "$aOutput"
+	
+	# write tag101 (image height)
+	hleT101="0101030001000000xxxxxxxx"
+	hleT101="${hleT101/xxxxxxxx/"$hleImgHeight"}"
+	printf "$hleT101" | xxd -r -p >> "$aOutput"
+	
+	# write tag102 (bits per sample)
+	case $aClrMode in
+		"mono") hleT102="020103000100000001000000" ;;
+		"grey") hleT102="020103000100000008000000" ;;
+		"color") 
+			hleT102="0201030003000000xxxxxxxx"
+			hleT102="${hleT102/xxxxxxxx/"$hleoBitsPS"}"	;;
+	esac
+	printf "$hleT102" | xxd -r -p >> "$aOutput"
+	
+	# write tag103 (сompression method)
+	hleT103="030103000100000001000000"
+	printf "$hleT103" | xxd -r -p >> "$aOutput"
+	
+	# write tag106 (photometric interpretation)
+	# 0 - black is Zero, 1- white is Zero, 2 - RGB
+	if [ "$aClrMode" == "color" ]; then
+		hleT106="060103000100000002000000"
+	elif [ "$aClrMode" == "grey" ]; then
+		hleT106="060103000100000001000000"
+	else
+		hleT106="060103000100000000000000"
+	fi
+	printf "$hleT106" | xxd -r -p >> "$aOutput"
+	
+	# write tag111 (strip offsets)
+	if [ -z ${dStripsQty+empty} ]; then	
+		hleT111="110104000100000008000000" 
+	else
+		hleT111="11010400$hleStripsQty$hleoStripOS"
+	fi
+	printf "$hleT111" | xxd -r -p >> "$aOutput"
+	
+	# write tag112 (orientation)
+	hleT112="120103000100000001000000"
+	printf "$hleT112" | xxd -r -p >> "$aOutput"
+	
+	# write tag115 (samples per pixel)
+	if [ "$aClrMode" == "color" ]; then
+		hleT115="150103000100000003000000"
+		printf "$hleT115" | xxd -r -p >> "$aOutput"
+	fi
+
+	# write tag116 (rows per strip)
+	hleT116="1601030001000000xxxxxxxx"
+	hleT116="${hleT116/xxxxxxxx/"$hleRowsPS"}"
+	printf "$hleT116" | xxd -r -p >> "$aOutput"
+
+	# write tag117 (strip byte counts)
+	if (( dStripsQty == 0 )) ; then
+		hleT117="1701040001000000xxxxxxxx"
+		hleT117="${hleT117/xxxxxxxx/"$hleStripBytes"}"
+	else
+		hleT117="17010400$hleStripsQty$hleoStripBC"
+	fi
+	printf "$hleT117" | xxd -r -p >> "$aOutput"
+
+	# write tag11a (x resolution = offset)
+	hleT11a="1A01050001000000xxxxxxxx"
+	hleT11a="${hleT11a/xxxxxxxx/"$hleoXres"}"
+	printf "$hleT11a" | xxd -r -p >> "$aOutput"
+
+	# write tag11b (y resolution = offset)
+	hleT11b="1B01050001000000xxxxxxxx"
+	hleT11b="${hleT11b/xxxxxxxx/"$hleoYres"}"
+	printf "$hleT11b" | xxd -r -p >> "$aOutput"
+
+	# write tag11c (planar configuration)
+	hleT11c="1C0103000100000001000000"
+	printf "$hleT11c" | xxd -r -p >> "$aOutput"
+	
+	# write tag128 (resolution unit = inch)
+	hleT128="280103000100000002000000"
+	printf "$hleT128" | xxd -r -p >> "$aOutput"
+	
+	# write "no next IFD"
+	printf "00000000" | xxd -r -p >> "$aOutput"
+	
+	# write resolution values
+	hleTRes="xxxxxxxx01000000"
+	hleTRes="${hleTRes/xxxxxxxx/"$hleResolution"}"
+	printf "$hleTRes" | xxd -r -p >> "$aOutput"
+	printf "$hleTRes" | xxd -r -p >> "$aOutput"
+	
+	# write bits per sample for color
+	if [ "$aClrMode" == "color" ]; then
+		hleTBitsPS="080008000800"
+		printf "$hleTBitsPS" | xxd -r -p >> "$aOutput"
+	fi
+
+	dStripId=0
+	if (( dStripBytes<dImgBytes )); then
+		
+		# write byte counts for each strip
+		dStripId=1
+		while (( dStripId<dStripsQty )); do
+			printf "$hleStripBytes" | xxd -r -p >> "$aOutput"
+			dStripId=$((dStripId+1))
+		done
+		printf "$hleLastBytes" | xxd -r -p >> "$aOutput"
+		
+		# write strip offsets for each strip
+		dStripOS=8; hleStripOS="08000000"
+		printf "$hleStripOS" | xxd -r -p >> "$aOutput"
+		dStripId=1
+		while (( dStripId<dStripsQty )); do
+			dStripOS=$(( dStripOS+dStripBytes ))
+			hleStripOS=$( printf '%08x\n' $dStripOS )
+			hleStripOS=$( big2lit $hleStripOS )
+			printf "$hleStripOS" | xxd -r -p >> "$aOutput"
+			dStripId=$((dStripId+1))
+		done
+	fi
+		
+	printf "=================================================\n"
+	printf "Debug: hleImgWidth        | $hleImgWidth\n"
+	printf "Debug: hleImgHeight       | $hleImgHeight\n"
+	printf "Debug: hleResolution      | $hleResolution\n"
+	printf "Debug: hleRowsPS          | $hleRowsPS\n"
+	printf "Debug: hleStripBytes      | $hleStripBytes\n"
+	printf "Debug: hleStripsQty       | $hleStripsQty\n"
+	printf "Debug: hleLastBytes       | $hleLastBytes\n"
+	printf "=================================================\n"
+	printf "Debug: hleoIFD            | $hleoIFD\n"
+	printf "Debug: hleoXres           | $hleoXres\n"
+	printf "Debug: hleoYres           | $hleoYres\n"
+	printf "Debug: hleoBitsPS         | $hleoBitsPS\n"
+	printf "Debug: hleoStripBC        | $hleoStripBC\n"
+	printf "Debug: hleoStripOS        | $hleoStripOS\n"
+	printf "=================================================\n"
+	printf "Debug: hleoIFD            | $hleoIFD\n"
+	printf "Debug: hleT100            | $hleT100\n"
+	printf "Debug: hleT101            | $hleT101\n"
+	printf "Debug: hleT102            | $hleT102\n"
+	printf "Debug: hleT103            | $hleT103\n"
+	printf "Debug: hleT106            | $hleT106\n"
+	printf "Debug: hleT111            | $hleT111\n"
+	printf "Debug: hleT112            | $hleT112\n"
+	printf "Debug: hleT115            | $hleT115\n"
+	printf "Debug: hleT116            | $hleT116\n"
+	printf "Debug: hleT117            | $hleT117\n"
+	printf "Debug: hleT11a            | $hleT11a\n"
+	printf "Debug: hleT11b            | $hleT11b\n"
+	printf "Debug: hleT11c            | $hleT11c\n"
+	printf "Debug: hleT128            | $hleT128\n"
+	printf "Debug: hleTRes            | $hleTRes\n"
+
+} # End Sub
+
+function convJob()
+{ # Begin Sub
+	
+	caclTiffParams;	formTiffHeader;	writeTiffImage
+	#identify -regard-warnings -verbose "$aOutput" > /dev/null 2>&1
+	#aIdentifyResult=$?
+	
+	aIdentifyResult=0
+	if [ "$aIdentifyResult" == "0" ]
+		then aResult="success"; else aResult="failed"
+	fi
+	printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub

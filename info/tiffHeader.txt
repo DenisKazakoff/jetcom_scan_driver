@@ -1,0 +1,87 @@
+TIFF File Header 
+The 8-byte TIFF file header contains the following information:
+
+Bytes 0-1: The byte order used within the file. Legal values are:“II”(4949.H)“MM” (4D4D.H).
+
+In the “II” format, byte order is always from the least significant byte to the most significant byte, 
+for both 16-bit and 32-bit integers This is called little-endian byte order. 
+In the “MM” format, byte order is always from most significant to least significant, 
+for both 16-bit and 32-bit integers. This is called big-endian byte order.
+
+Bytes 2-3: An arbitrary but carefully chosen number (42) that further identifies the file as a TIFF file.
+The byte order depends on the value of Bytes 0-1.
+
+Bytes 4-7:  The offset (in bytes) of the first IFD. The directory may be at any location in the file after 
+the header but must begin on a word boundary. In particular, an Image File Directory may follow the image data it describes. 
+Readers must follow the pointers wherever they may lead.The term byte offset is always used in this document to refer to 
+a location with respect to the beginning of the TIFF file. The first byte of the file has an offset of 0.
+
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+little-endian   tiff    IFD offset
+4949            2A00    C26C4200
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+IFD Entry 
+Each 12-byte IFD Entry is in the following format.
+
+Bytes	Description
+0-1	The Tag that identifies the field
+2-3	The field type
+4-7	Count of the indicated type
+8-11	The Value Offset, the file offset (in bytes) of the Value for the field.The Value is expected to begin on a word boundary; 
+the correspond-ing Value Offset will thus be an even number. This file offset may point anywhere in the file, even after the image data
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Number of IFD entries
+0F00
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+tag     type    count       value 
+0001    0203    04050607    08091011
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+0001    0300    01000000    68130000    #1      #100 (Width, px)
+0101    0300    01000000    621B0000    #2      #101 (Height, px)
+0201    0300    01000000    01000000    #3      #102 (BitsPerPixel 1, 4 or 8)
+0301    0300    01000000    01000000    #4      #103 (Compression 1, 32773)
+0601    0300    01000000    00000000    #5      #106 (PhotometricInterpretation 0[Black is Zero], 1[White is Zero], 2[RGB], 3[ColorMap])
+1101    0400    07000000    A86D4200    #6      #111 offset 0x426DA8 (StripOffsets)
+1201    0300    01000000    01000000    #7	#112 (Orientation 0..7)
+1501    0300    01000000    01000000    #8	#115 (SamplesPerPixel 1[???],3[RGB])
+1601    0300    01000000    00040000    #9      #116 (RowsPerStrip)
+1701    0400    07000000    8C6D4200    #10     #117 offset 0x426D8C (StripByteCounts)
+1A01    0500    01000000    7C6D4200    #11     #11a offset 0x426D7C (XResolution)
+1B01    0500    01000000    846D4200    #12     #11b offset 0x426D84 (YResolution)
+1C01    0300    01000000    01000000    #13	#11c (PlanarConfiguration 1[Chunky] or 2[Planar])
+2801    0300    01000000    02000000    #14     #128 (ResolutionUnit 1[No],2[inch] or 3[cm])
+3101    0200    0A000000    C46D4200    #15	#131 offset 0x426DC4 (Software)
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# Next IFD offset
+00000000
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# 0x258 = 600 YResolution
+58020000 01000000
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# 0x258 = 600 XResolution
+58020000 01000000
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# StripByteCounts
+00B40900
+00B40900
+00B40900
+00B40900
+00B40900
+00B40900
+BA340800
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# StripOffsets
+08000000
+08B40900
+08681300
+081C1D00
+08D02600
+08843000
+08383A00
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# IrfanView
+497266616E56696577
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# EOF
+00
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

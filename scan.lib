@@ -1,0 +1,629 @@
+#!/usr/bin/bash
+<<'COMMENT'
+ * This file is part of the TORUScan project.
+ * TORUScan - driver for TORUS(R) series network scaners by Jetcom(R)
+ * Copyright (C) 2022 Denis Kazakov <kazakow.denis@yandex.ru>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; see the file COPYING.  If not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ * Boston, MA 02110-1301, USA.
+COMMENT
+
+# ******************************************************************
+# Global variables
+# ******************************************************************
+aCmdCache="$aTMP/cmd.tmp"
+aDataCache="$aTMP/data.tmp"
+aMesCache="$aTMP/ames.tmp"
+bMesCache="$aTMP/bmes.tmp"
+dCmdPID=0
+dDataPID=0
+
+aHeader=""
+aMessage=""
+dMesLen=0
+hMesLen=""
+dMesCnt=0
+aReply=""
+params=()
+
+dImgBytes=0; hImgBytes=""
+dImgWidth=0; hImgWidth=""
+dImgHeight=0; hImgHeight=""
+
+# /// create message content
+function createMessage()
+{ # Begin Sub
+	if (( ${#params[@]} <= 0)); then
+		#printf "DEBUG: no params found\n"
+		aMessage="$aHeader"
+	else
+		#printf "DEBUG: found ${#params[@]} params\n"
+		aMessage="$aHeader"
+		for item in "${params[@]}"; do
+			aMessage="$aMessage$item"
+		done
+		aMessage=${aMessage//[[:blank:]]/}
+	fi
+	#printf "DEBUG: aMessage: $aMessage\n"
+} # End Sub
+
+# /// read reply from scaner
+function readReply()
+{ # Begin Sub
+	if [ -f "$aMesCache" ]; then rm -Rv "$aMesCache" > /dev/null 2>&1; fi
+	xxd -p -g 1 -c 512 "$bMesCache" "$aMesCache"
+	aReply=$(cat "$aMesCache"); aReply=${aReply#*"$aMessage"}
+	#printf "DEBUG: aReply: $aReply\n"
+} # End Sub
+
+# /// send aMessage to scaner
+function sendMessage()
+{ # Begin Sub
+	dMesCnt=$(( dMesCnt+1 ))
+	if [ -f "$bMesCache" ]; then rm -Rv "$bMesCache" > /dev/null; fi
+	printf "$aMessage" | xxd -r -p > "$bMesCache"
+
+	#socat -d -d -d -x "$bMesCache" "$aCmdCache" # verbose
+	socat "$bMesCache" "$aCmdCache"
+	dError=$?; sleep 0.25
+	# Restore stdout after socat
+	#exec &>/dev/tty
+
+	#if [ "$dError" == "0" ]
+	#	then aResult="success"; else aResult="failed"
+	#fi
+	#printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Subping
+
+# // stage 1. command transfer channel
+function openCommandChannel()
+{ # Begin Sub
+	if [ -f "$aCmdCache" ]; then rm -v "$aCmdCache" > /dev/null; fi
+	#socat -d -d -d PTY,raw,echo=0,link="$aCmdCache",ignoreeof TCP:"$aIPaddr":30000,connect-timeout=15 & #verbose
+	socat PTY,raw,echo=0,link="$aCmdCache",ignoreeof TCP:"$aIPaddr":30000,connect-timeout=15 &
+	dCmdPID=$!; dError=$?
+	# Restore stdout after socat
+	#exec &>/dev/tty
+
+	local aProcName=""
+	aProcName=$( ps | grep "$dCmdPID" )
+	if 	[[ $aProcName == *"socat"* ]]
+		then aResult="success"; else aResult="failed"
+	fi
+
+	#printf "DEBUG: aProcName $aProcName\n"
+	#printf "DEBUG: dCmdPID: $dCmdPID\n"
+	printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 2. check ready status
+function checkReadyStatus()
+{ # Begin Sub
+	aHeader="02020000020000100000000000000000"; params=()
+	createMessage; sendMessage; readReply
+
+	case $aReply in
+		"020200000200001cf8db000000000000010000000001020000000005")
+			aResult="success";;
+		"0201000002000016fad8000000000000010000100000")
+			aResult="not ready";;
+		*)	aResult="failed";;
+	esac
+	printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 3. specify the hostname
+function specifyHostname()
+{ # Begin Sub
+	# get hostanme in hexadecimal representation
+	local 	aHostname=$( hostname )
+	local 	hHostname=$( hostname | xxd -p -g 1 -c 512 )
+			hHostname=${hHostname%0a}
+	local 	dHostLen=${#aHostname}
+	local 	hHostLen=$( printf '%02x\n' $dHostLen )
+	local 	dMesLen=$(( dHostLen+19 ))
+	local 	hMesLen=$( printf '%04x\n' $dMesLen )
+
+	aHeader="000100000200${hMesLen}0000000000000000"
+	params=( "8000" $hHostLen $hHostname )
+	createMessage; sendMessage; readReply
+
+	case $aReply in
+		"0001000002000016fce8000000000000010000000000")
+			aResult="success";;
+		"0001000202000016fcd6000000000000010000100000")
+			aResult="not ready";;
+		*)	aResult="failed";;
+	esac
+	printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 4. set job parameters
+function specifyJobParams()
+{ # Begin Sub
+
+	# /// standard sheets sizes
+	local hA4W="0837"  ##d2103
+	local hA4H="0b9d"  ##d2973
+	local hA3W="0b9d"  ##d2973
+	local hA3H="106d"  ##d4205
+	local hA2W="106d"  ##d4205
+	local hA2H="1739"  ##d5945
+	local hA1W="1739"  ##d5945
+	local hA1H="20da"  ##d8410
+	local hA0W="20da"  ##d8410
+	local hA0H="2e72"  ##d11890
+
+	local hUdefWidth=""; 	local hUdefHeight=""
+	local hXOffset=""; 		local hYOffset=""
+	local hFullWidth=""; 	local hFullHeight=""
+
+	#values need to be specify
+	local pResolution="03000000xxxx"
+	#default values for any cases
+	local pFormat1="010000000000"
+	local pFormat2="020000000000"
+	local pNegative="0b0000000000"
+	local pBinNoAuto="0f0100000000"
+	local pSpeed="620000000000"
+	local param20="0e0000000000"
+	local param39="610000000000"
+	#default preset for auto format
+	local pFullWidth="040000000000"
+	local pFullHeight="040100000000"
+	local pSheetWidth="050000000000"
+	local pSheetHeight="050100000000"
+	local pXOffset="060000000000"
+	local pYOffset="060100000000"
+	#default preset for grey mode
+	local pClrMode="500000000002"
+	local pPreset1="070000000000"
+	local pPreset2="0700ffffffff"
+	local pbwMode1="0d0000000001"
+	local pbwMode2="0d0100000080"
+
+	local pDensity="080000000003"
+	local pSharpness="090000000000"
+	local pContrast="0a0000000001"
+	local pBalance="0c0100000000"
+	local pBinValue="0f0000000080"
+
+	case "$aResolution" in
+		'150') pResolution="030000000096" ;;
+		'200') pResolution="0300000000c8" ;;
+		'300') pResolution="03000000012c" ;;
+		'400') pResolution="030000000190" ;;
+		'600') pResolution="030000000258" ;;
+	esac
+
+	if [ "$aFormat" != "auto" ]; then
+
+		pFormat1="010000000001"; pFormat2="020000000000"
+
+		case "$aFormat" in
+			"autoa") pFormat1="010000000000"; pFormat2="020000000001" ;;
+			"a4")
+				if [ "$aOrient" == "portrait" ]; then
+					pFullWidth="04000000${hA4W}"; pFullHeight="04010000${hA4H}"
+					pSheetWidth="05000000${hA4W}"; pSheetHeight="05010000${hA4H}"
+				else
+					pFullWidth="04000000${hA4H}"; pFullHeight="04010000${hA4W}"
+					pSheetWidth="05000000${hA4H}"; pSheetHeight="05010000${hA4W}"
+				fi ;;
+			"a3")
+				if [ "$aOrient" == "portrait" ]; then
+					pFullWidth="04000000${hA3W}"; pFullHeight="04010000${hA3H}"
+					pSheetWidth="05000000${hA3W}"; pSheetHeight="05010000${hA3H}"
+				else
+					pFullWidth="04000000${hA3H}"; pFullHeight="04010000${hA3W}"
+					pSheetWidth="05000000${hA3H}"; pSheetHeight="05010000${hA3W}"
+				fi ;;
+			"a2")
+				if [ "$aOrient" == "portrait" ]; then
+					pFullWidth="04000000${hA2W}"; pFullHeight="04010000${hA2H}"
+					pSheetWidth="05000000${hA2W}"; pSheetHeight="05010000${hA2H}"
+				else
+					pFullWidth="04000000${hA2H}"; pFullHeight="04010000${hA2W}"
+					pSheetWidth="05000000${hA2H}"; pSheetHeight="05010000${hA2W}"
+				fi ;;
+			"a1")
+				if [ "$aOrient" == "portrait" ]; then
+					pFullWidth="04000000${hA1W}"; pFullHeight="04010000${hA1H}"
+					pSheetWidth="05000000${hA1W}"; pSheetHeight="05010000${hA1H}"
+				else
+					pFullWidth="04000000${hA1H}"; pFullHeight="04010000${hA1W}"
+					pSheetWidth="05000000${hA1H}"; pSheetHeight="05010000${hA1W}"
+				fi ;;
+			"a0")
+				if [ "$aOrient" == "portrait" ]; then
+					pFullWidth="04000000${hA0W}"; pFullHeight="04010000${hA0H}"
+					pSheetWidth="05000000${hA0W}"; pSheetHeight="05010000${hA0H}"
+				else
+					pFullWidth="04000000${hA0H}"; pFullHeight="04010000${hA0W}"
+					pSheetWidth="05000000${hA0H}"; pSheetHeight="05010000${hA0W}"
+				fi ;;
+			"userdef")
+				hUdefWidth=$( printf '%08x\n' $dUdefWidth )
+				hXOffset=$( printf '%08x\n' $dXOffset )
+				hFullWidth=$( printf '%08x\n' $dFullWidth )
+				pFullWidth="0400${hFullWidth}"
+				pSheetWidth="0500${hUdefWidth}"
+				pXOffset="0600${hXOffset}"
+
+				hUdefHeight=$( printf '%08x\n' $dUdefHeight )
+				hYOffset=$( printf '%08x\n' $dYOffset )
+				hFullHeight=$( printf '%08x\n' $dFullHeight )
+				pFullHeight="0401${hFullHeight}"
+				pSheetHeight="0501${hUdefHeight}"
+				pYOffset="0601${hYOffset}" ;;
+		esac
+	fi
+
+	case "$aClrMode" in
+		'mono')
+			case "$aPreset" in
+				'text/graph')
+					pDensity="080000000005"
+					pSharpness="090000000000"
+					pContrast="0a0000000001"
+					pBalance="0c0100000000"
+					pBinValue="0f0000000000"
+					pPreset1="070000000000" ;;
+				'svetocopy')
+					pDensity="080000000005"
+					pSharpness="090000000000"
+					pContrast="0a0000000001"
+					pBalance="0c0100000000"
+					pBinValue="0f0000000032"
+					pPreset1="070000000001" ;;
+				'text/photo')
+					pDensity="080000000005"
+					pSharpness="090000000000"
+					pContrast="0a0000000001"
+					pBalance="0c0100000004"
+					pBinValue="0f0000000000"
+					pPreset1="070000000002" ;;
+				'photo')
+					pDensity="080000000003"
+					pSharpness="090000000000"
+					pContrast="0a0000000001"
+					pBalance="0c0100000001"
+					pBinValue="0f0000000000"
+					pPreset1="070000000003"
+					param20="0e0000000002" ;;
+			esac
+			pPreset2=$pPreset1
+			pClrMode="500000000000"
+			pbwMode1="0d0000000001"
+			pbwMode2="0d0100000080";;
+
+		'color')
+			case "$aPreset" in
+				'text')
+					pDensity="080000000006"
+					pSharpness="090000000001"
+					pContrast="0a0000000001"
+					pBalance="0c0100000005"
+					pBinValue="0f0000000080"
+					pPreset1="070000000000" ;;
+				'photo')
+					pDensity="080000000002"
+					pSharpness="090000000000"
+					pContrast="0a0000000002"
+					pBalance="0c0100000000"
+					pBinValue="0f0000000080"
+					pPreset1="070000000001" ;;
+				'text/photo')
+					pDensity="080000000003"
+					pSharpness="090000000001"
+					pContrast="0a0000000001"
+					pBalance="0c0100000006"
+					pBinValue="0f0000000080"
+					pPreset1="070000000002"
+					param39="610000000000" ;;
+				'map')
+					pDensity="080000000003"
+					pSharpness="090000000001"
+					pContrast="0a0000000001"
+					pBalance="0c0100000002"
+					pBinValue="0f0000000080"
+					pPreset1="070000000003" ;;
+			esac
+			pPreset2=$pPreset1
+			pClrMode="500000000001"
+			pbwMode1="0d0000000000"
+			pbwMode2="0d0100000000";;
+	esac
+
+	if [ "$aSpeed" == 'medium' ]
+		then pSpeed="620000000001"; fi
+
+	if ! [ -z ${aNegative} ]; then
+		pNegative="0b000000000x"
+		pNegative=${pNegative/x/"$aNegative"}
+	fi
+
+	if ! [ -z ${aDensity} ]; then
+		pDensity="08000000000x"
+		pDensity=${pDensity/x/"$aDensity"}
+	fi
+
+	if ! [ -z ${aSharpness} ]; then
+		pSharpness="09000000000x"
+		pSharpness=${pSharpness/x/"$aSharpness"}
+	fi
+
+	if ! [ -z ${aContrast} ]; then
+		pContrast="0a000000000x"
+		pContrast=${pContrast/x/"$aContrast"}
+	fi
+
+	if ! [ -z ${aBalance} ]; then
+		pBalance="0c010000000x"
+		pBalance=${pBalance/x/"$aBalance"}
+	fi
+
+	if ! [ -z ${aBinValue} ]; then
+		pBinNoAuto="0f0100000001"
+		local hBinValue=$( printf '%02x\n' $aBinValue )
+		pBinValue="0f00000000xx"
+		pBinValue=${pBinValue/xx/"$hBinValue"}
+	fi
+
+	aHeader="01000000020001000000000000000000"
+	params=("$pFormat1" \ 		#01 format auto/userdef
+			"$pFormat2" \ 		#02 format auto/userdef
+			"$pResolution" \ 	#03 resolution
+			"$pFullWidth" \ 	#04 udef width*10
+			"$pFullHeight" \ 	#05 udef height*10
+			"$pSheetWidth" \ 	#06 udef width*10
+			"$pSheetHeight" \ 	#07 udef height*10
+			"$pXOffset" \ 		#08 udef xoffset*10
+			"$pYOffset" \ 		#09 udef xoffset*10
+			"$pPreset1" \ 		#10 preset value
+			"$pPreset2" \ 		#11 image type
+			"$pDensity" \ 		#12 density 0..8
+			"$pSharpness" \		#13 sharpness 0..4
+			"$pContrast" \ 		#14 contrast 0..2
+			"$pNegative" \ 		#15 positive/negative
+			"0c0000000001" \ 	#16 ???
+			"$pBalance" \ 		#17 balance 0..12
+			"$pbwMode1" \ 		#18 mono mode
+			"$pbwMode2" \ 		#19 mono mode
+			"$param20" \ 		#20 ???
+			"$pBinValue" \ 		#21 binarization 0..255
+			"$pBinNoAuto" \ 	#22 limit auto=0
+			"100000000000" \ 	#23 ???
+			"110000000000" \ 	#24 ???
+			"120000000000" \ 	#25 ???
+			"130000000000" \ 	#26 ???
+			"140000000000" \ 	#27 ???
+			"150000000000" \ 	#28 ???
+			"160000000000" \ 	#29 ???
+			"170000000000" \ 	#30 ???
+			"180000000000" \ 	#31 ???
+			"190000000000" \ 	#32 ???
+			"1b0000000000" \ 	#33 ???
+			"1c0000000000" \ 	#34 ???
+			"1a0000000000" \ 	#35 ???
+			"1d0000000000" \ 	#36 ???
+			"$pClrMode" \ 		#37 colors
+			"600000000000" \ 	#38 ???
+			"$param39" \ 		#39 ???
+			"$pSpeed") 			#40 speed
+
+	createMessage; sendMessage; readReply
+
+	case $aReply in
+		"0100000002000010fcef000000000000")
+			aResult="success";;
+		"0100000102000010fcee000000000000")
+			aResult="not ready";;
+		*)	aResult="failed";;
+	esac
+	printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 5. specify sample return mode
+function specifySmpReturn()
+{ # Begin Sub
+		local pDirection="01010000000x"
+		case "$aDirection" in
+			'back') 	pDirection="010100000001" ;;
+			'fwd') 		pDirection="010100000002" ;;
+			'start') 	pDirection="010100000003" ;;
+		esac
+		aHeader="00030000020000280000000000000000"
+		params=( "010000000000" "010200000000" "$pDirection" "020000000000")
+		createMessage; sendMessage; readReply
+
+		case $aReply in
+			"0003000002000010fdec000000000000")
+				aResult="success";;
+			"0003000102000010fdeb000000000000")
+				aResult="not ready";;
+			*)	aResult="failed";;
+		esac
+		printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 6. wait for scan completed
+function checkScanIsOver()
+{ # Begin Sub
+	aHeader="02010000020000100000000000000000"; params=()
+	createMessage; sendMessage; readReply
+
+	case $aReply in
+		"0201000002000016fad8000000000000010000100000")
+			printf "Warn: ${FUNCNAME}: scanner is busy\n"
+			aResult="empty";;
+		"020100000200001677d8000000000000010081100200")
+			printf "Warn: ${FUNCNAME}: cover not closed\n"
+			aResult="empty";;
+		"0201000002000016fad7000000000000010000100001")
+			printf "Info: ${FUNCNAME}: scanning right now..\n"
+			aResult="empty";;
+		"02010000020000167ad6000000000000010080100002")
+			aResult="success";;
+		"020100000200001678d8000000000000010081100100")
+			printf "Error: ${FUNCNAME}: the original is jammed\n"
+			aResult="failed";;
+		*)	aResult="failed";;
+	esac
+	printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 7. get image parameters
+function getImageParams()
+{ # Begin Sub
+		aHeader="02000000020000100000000000000000"; params=()
+		createMessage; sendMessage; readReply
+
+		local dRepLen=${#aReply}
+		case $dRepLen in
+			164) 	hImgBytes=${aReply:36:8}
+					dImgBytes=$((16#$hImgBytes))
+
+					hImgWidth=${aReply:64:4}
+					dImgWidth=$((16#$hImgWidth))
+
+					hImgHeight=${aReply:76:4}
+					dImgHeight=$((16#$hImgHeight))
+
+					aResult="success";;
+			*) 		aResult="failed";;
+		esac
+
+		printf "debug: hImgBytes: $hImgBytes\n"
+		printf "debug: dImgBytes: $dImgBytes\n"
+		printf "debug: hImgHeight: $hImgHeight\n"
+		printf "debug: dImgHeight: $dImgHeight\n"
+		printf "debug: hImgWidth: $hImgWidth\n"
+		printf "debug: dImgWidth: $dImgWidth\n"
+		printf "DEBUG: dRepLen: $dRepLen\n"
+		printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 8. start data transfer
+function startDataTransfer()
+{ # Begin Sub
+		aHeader="00060000020000100000000000000000"; params=()
+		createMessage; sendMessage; readReply
+
+		case $aReply in
+			"00060000020000167fe3000000000000010000007d00")
+				aResult="success";;
+			*)	aResult="failed";;
+		esac
+		printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 9. data transfer channel
+function openDataChannel()
+{ # Begin Sub
+		if [ -f "$aDataCache" ]; then rm -v "$aDataCache" > /dev/null; fi
+		#socat -d -d -d "$aDataCache",ignoreeof TCP:"$aIPaddr":32000,connect-timeout=15 & #verbose
+		socat "$aDataCache",ignoreeof TCP:"$aIPaddr":32000,connect-timeout=15 &
+		dDataPID=$!; dError=$?
+		# Restore stdout after socat
+		#exec &>/dev/tty
+
+		local aProcName=""
+		aProcName=$( ps | grep "$dDataPID" )
+
+		if 	[[ $aProcName == *"socat"* ]]
+			then 	printf "Info: ${FUNCNAME}: data transfer right now..\n"
+					wait $dDataPID
+					aResult="success"
+			else 	aResult="failed"
+		fi
+
+		#printf "DEBUG: aProcName $aProcName\n"
+		#printf "DEBUG: dDataPID: $dDataPID\n"
+		printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 10. check data integrity
+function checkDataIntegrity()
+{ # Begin Sub
+		local dFileBytes=$( stat -c%s "$aDataCache" )
+		if ! [ -z ${dFileBytes} ] && (( dImgBytes == dFileBytes ))
+				then aResult="success"; else aResult="failed"
+		fi
+		printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 11. stop data reception
+function stopReception()
+{ # Begin Sub
+		aHeader="00040000020000100000000000000000"; params=()
+		createMessage; sendMessage; readReply
+
+		#case $aReply in
+		#	"0004000002000010fdeb000000000000")
+		#		aResult="success" ;;
+		#	*)	aResult="failed" ;;
+		#esac
+		#printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
+
+# /// Stage 12. end job
+function endScanJob()
+{ # Begin Sub
+		aHeader="00020000020000100000000000000000"; params=()
+		createMessage; sendMessage; readReply
+
+		#case $aReply in
+		#	"0002000002000010fded000000000000")
+		#		aResult="success" ;;
+		#	*)	aResult="failed" ;;
+		#esac
+		#printf "DEBUG: ${FUNCNAME}: $aResult\n"
+
+		local aProcName=""
+		aProcName=$( ps | grep "$dCmdPID" | awk '{ print $4 }' )
+		if [ "$aProcName" == "socat" ]; then kill $dCmdPID; fi
+
+		aProcName=$( ps | grep "$dDataPID" | awk '{ print $4 }' )
+		if [ "$aProcName" == "socat" ]; then kill $dDataPID; fi
+} # End Sub
+
+# /// Main Function
+function scanJob()
+{ # Begin Sub
+
+	openCommandChannel
+	# ///
+	if [ "$aResult" != "failed" ]; then checkReadyStatus; fi
+	if [ "$aResult" != "failed" ]; then specifyHostname; fi
+	if [ "$aResult" != "failed" ]; then specifyJobParams; fi
+	if [ "$aResult" != "failed" ]; then specifySmpReturn; fi
+	# ///
+	if [ "$aResult" != "failed" ]; then
+		aResult="empty"
+		while (	[ "$aResult" != "success" ] && \
+				[ "$aResult" != "failed" ] )
+		do sleep 3.5; checkScanIsOver; done
+	fi
+	# ///
+	if [ "$aResult" != "failed" ]; then getImageParams; fi
+	if [ "$aResult" != "failed" ]; then startDataTransfer; fi
+	if [ "$aResult" != "failed" ]; then openDataChannel; fi
+	if [ "$aResult" != "failed" ]; then checkDataIntegrity; fi
+	# ///
+	stopReception
+	endScanJob
+	printf "DEBUG: ${FUNCNAME}: $aResult\n"
+} # End Sub
